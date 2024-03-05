@@ -1,11 +1,11 @@
 use aws_lambda_events::event::sqs::SqsEvent;
-use chrono::{ Local, NaiveDate, ParseError };
+use chrono:: Local ;
 use dotenv::dotenv;
 use lambda_runtime::{run, service_fn, tracing, Error, LambdaEvent};
 use sqlx::postgres::{PgPoolOptions, PgRow};
 use sqlx::types::time::Date;
 use sqlx::{Pool, Postgres, Row};
-use std::{ cmp::Ordering, env};
+use std::env;
 
 enum SparkPlans {
     Hobby,      // 100
@@ -24,14 +24,6 @@ impl SparkPlans {
             }
         }
     }
-}
-
-fn compare_dates(date1: &str, date2: &str) -> Result<Ordering, ParseError> {
-    // Parse the strings into NaiveDate
-    let parsed_date1 = NaiveDate::parse_from_str(date1, "%Y-%m-%d");
-    let parsed_date2 = NaiveDate::parse_from_str(date2, "%Y-%m-%d");
-    // Compare the parsed dates
-    Ok(parsed_date1?.cmp(&parsed_date2?))
 }
 
 async fn handle_plan_expiration(apikey: &str, db_client: &Pool<Postgres>) {
@@ -55,100 +47,78 @@ async fn rate_limit(res: PgRow, db_client: &Pool<Postgres>, apikey: String) -> b
 
     let current_date: String = Local::now().date_naive().to_string();
 
-    let (plan_type, ref_date, hits, plan_expiry_date) = (
+    let (plan_type, hits, plan_expiry_date) = (
         res.try_get::<String, _>("plantype").unwrap(),
-        res.try_get::<Date, _>("refdate").unwrap().to_string(),
         res.try_get::<i64, _>("hits").unwrap(),
         res.try_get::<Date, _>("expiryon").unwrap(),
     );
 
-    let comapred_dates = compare_dates(&current_date, &ref_date).unwrap();
+    match SparkPlans::plan_from_str(&plan_type) {
 
-    // ref_date is outdated then ...
-    if comapred_dates == Ordering::Greater {
+        SparkPlans::Hobby => {
+            if hits > 100 {
 
-        // hits reseted and ref_date updated to current_date
-        let _ = sqlx::query(
-            "UPDATE UserRequests SET refdate = CURRENT_DATE, hits = 1 WHERE apikey = $1;"
-            )
-            .bind(&apikey)
-            .execute(db_client)
-            .await
-        ;
+                let _ = sqlx::query(
+                    "UPDATE UserKeyStatus SET status = 'Daily limit reached' WHERE apikey = $1;"
+                    )
+                    .bind(&apikey)
+                    .execute(db_client)
+                    .await
+                ;
 
-        println!("Updated the ref_date to current_date & hits to 1.");
-    }
-    
-    if comapred_dates == Ordering::Equal {  //  same din hai, sirf hits ko increment karna hai
+                println!("A user with hobby plan reached its daily limit");
+            } 
+            else {
 
-        match SparkPlans::plan_from_str(&plan_type) {
-            SparkPlans::Hobby => {
+                let _ = sqlx::query(
+                    "UPDATE UserRequests SET hits = hits + 1 WHERE apikey = $1;"
+                    )
+                    .bind(&apikey)
+                    .execute(db_client)
+                    .await
+                ;
 
-                if hits > 100 {
+                println!("A user with hobby plan incremented its hits !!");
+            }
+        }
 
-                    let _ = sqlx::query(
-                        "UPDATE UserKeyStatus SET status = 'Daily limit reached' WHERE apikey = $1;"
-                        )
-                        .bind(&apikey)
-                        .execute(db_client)
-                        .await
-                    ;
+        SparkPlans::Priority => {
 
-                    println!("A user with hobby plan reached its daily limit");
-
-                } 
-                else {
-
-                    let _ = sqlx::query(
-                        "UPDATE UserRequests SET hits = hits + 1 WHERE apikey = $1;"
-                        )
-                        .bind(&apikey)
-                        .execute(db_client)
-                        .await
-                    ;
-
-                    println!("A user with hobby plan incremented its hits !!");
-                }
+            if plan_expiry_date.to_string() == current_date {
+                handle_plan_expiration(&apikey, db_client).await;
+                println!("User's priority plan with key: {} has expired !", apikey);
+                return true;   
             }
 
-            SparkPlans::Priority => {
+            if hits > 5000 {
+                let _ = sqlx::query(
+                    "UPDATE UserKeyStatus SET status = 'Daily limit reached' WHERE apikey = $1;"
+                    )
+                    .bind(&apikey)
+                    .execute(db_client)
+                    .await
+                ;
+            } 
 
-                if plan_expiry_date.to_string() == Local::now().date_naive().to_string() {
-                    handle_plan_expiration(&apikey, db_client).await;
-                    println!("User's priority plan with key: {} has expired !", apikey);
-                    return true;   
-                }
-
-                if hits > 5000 {
-                    let _ = sqlx::query(
-                        "UPDATE UserKeyStatus SET status = 'Daily limit reached' WHERE apikey = $1;"
-                        )
-                        .bind(&apikey)
-                        .execute(db_client)
-                        .await
-                    ;
-                } 
-
-                else {
-                    let _ = sqlx::query(
-                        "UPDATE UserRequests SET hits = hits + 1 WHERE apikey = $1;"
-                        )
-                        .bind(&apikey)
-                        .execute(db_client)
-                        .await
-                    ;
-                }
-
-                println!("A user with priority plan reached its daily limit");
+            else {
+                let _ = sqlx::query(
+                    "UPDATE UserRequests SET hits = hits + 1 WHERE apikey = $1;"
+                    )
+                    .bind(&apikey)
+                    .execute(db_client)
+                    .await
+                ;
             }
 
-            SparkPlans::Enterprize => {
-                if plan_expiry_date.to_string() == Local::now().date_naive().to_string() {
-                    println!("PLAN EXPIRED RE-SUBSCRIBE TO YOUR PRIORITY PLAN TO CONTINUE !!");
-                }
-                // we need to handle enterprize customers as well here ... 
-                println!("ENTERPIZE USER !!");
+            println!("A user with priority plan reached its daily limit");
+        }
+
+        SparkPlans::Enterprize => {
+            if plan_expiry_date.to_string() == current_date {
+                println!("PLAN EXPIRED RE-SUBSCRIBE TO YOUR PRIORITY PLAN TO CONTINUE !!");
             }
+            // we need to handle enterprize customers as well here ... 
+            println!("ENTERPIZE USER !!");
         }
     }
 
