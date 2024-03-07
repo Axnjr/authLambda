@@ -6,7 +6,7 @@
   - Enterprize: Infinite Daily Requests ( Not planned lmao 😅 )
 
 ### However after running a few benchmark tests I was disappointed. Rust lambda's are not that fast & efficient. 
-### Processing Each request took around 2s each that's indeed fast for what I am doing but I still felt that it could be more fast, so I researched and found that: Lambda's have some issues with Tokio Async Runtime.
+### Processing Each request took around **2s** each that's indeed fast for what I am doing but I still felt that it could be more fast, so I researched and found that: Lambda's have some issues with Tokio Async Runtime.
 
 # Solution
-I re-wrote it in Go & now each request takes around 800ms 🚀🤘
+I re-wrote it in Go & now each request takes around **800ms** 🚀🤘 https://github.com/Axnjr/authLambdaGo
